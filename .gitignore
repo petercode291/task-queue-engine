@@ -1,0 +1,13 @@
+# Virtual environment and caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local databases (the engine creates tasks.db on first run)
+*.db
+*.db-journal
+
+# Editor and secrets
+.vscode/
+.env

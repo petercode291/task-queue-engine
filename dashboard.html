@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Task Engine Dashboard</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 0 auto; padding: 30px 20px; background: #f3f4f6; color: #111827; }
+        .header-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+        h1 { margin: 0; color: #1f2937; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+        .live-badge { font-size: 13px; padding: 4px 10px; background: #dcfce3; color: #166534; border-radius: 9999px; font-weight: 600; }
+        .live-badge.offline { background: #fee2e2; color: #991b1b; }
+
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+        .card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; border: 1px solid #e5e7eb; }
+        .card h3 { margin: 0 0 8px 0; font-size: 13px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+        .card p { margin: 0; font-size: 36px; font-weight: bold; }
+        .text-blue { color: #3b82f6; }
+        .text-yellow { color: #eab308; }
+        .text-green { color: #22c55e; }
+        .text-red { color: #ef4444; }
+
+        .table-wrap { overflow-x: auto; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e5e7eb; background: white; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        th { background: #f9fafb; font-weight: 600; font-size: 14px; color: #4b5563; }
+        .empty { text-align: center; color: #6b7280; padding: 32px 16px; }
+
+        .badge { padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; display: inline-block; }
+        .bg-PENDING, .bg-RETRYING { background: #dbeafe; color: #1e40af; }
+        .bg-RUNNING { background: #fef3c7; color: #92400e; }
+        .bg-COMPLETED { background: #dcfce3; color: #166534; }
+        .bg-FAILED { background: #fee2e2; color: #991b1b; }
+
+        button { background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s; }
+        button:hover { background: #dc2626; }
+        button:focus-visible { outline: 2px solid #1f2937; outline-offset: 2px; }
+        button:disabled { background: #9ca3af; cursor: not-allowed; }
+        .error-text { color: #ef4444; font-size: 13px; margin-top: 4px; display: block; }
+        .meta-text { color: #6b7280; font-size: 13px; }
+        .message { background: #fee2e2; color: #991b1b; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+
+        @media (max-width: 700px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+    </style>
+</head>
+<body>
+    <div class="header-bar">
+        <h1>Engine Status: <span id="status" class="text-green">Running</span>
+            <span id="live-indicator" class="live-badge" aria-live="polite">Live: connecting...</span>
+        </h1>
+    </div>
+
+    <div id="message" class="message" role="alert" hidden></div>
+
+    <div class="grid">
+        <div class="card"><h3 class="text-blue">Queued</h3><p id="count-queued">0</p></div>
+        <div class="card"><h3 class="text-yellow">Running</h3><p id="count-running">0</p></div>
+        <div class="card"><h3 class="text-green">Completed</h3><p id="count-completed">0</p></div>
+        <div class="card"><h3 class="text-red">Failed</h3><p id="count-failed">0</p></div>
+    </div>
+
+    <h2>Recent Tasks</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Task ID</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Retries</th>
+                    <th>Duration / Time</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="task-list"></tbody>
+        </table>
+    </div>
+
+    <script>
+        // Escape every value that comes from the server before putting it in HTML.
+        const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
+
+        const REFRESH_MS = 1000;
+        const STATUS_ORDER = { FAILED: 0, RUNNING: 1, PENDING: 2, RETRYING: 2, COMPLETED: 3 };
+        let busy = false;
+        let messageTimer = null;
+
+        function showMessage(text) {
+            const el = document.getElementById('message');
+            el.textContent = text;
+            el.hidden = false;
+            clearTimeout(messageTimer);
+            messageTimer = setTimeout(() => { el.hidden = true; }, 6000);
+        }
+
+        function setConnection(online) {
+            const status = document.getElementById('status');
+            const indicator = document.getElementById('live-indicator');
+            status.textContent = online ? 'Running' : 'Offline';
+            status.className = online ? 'text-green' : 'text-red';
+            indicator.className = online ? 'live-badge' : 'live-badge offline';
+            indicator.textContent = online
+                ? `Live: updated ${new Date().toLocaleTimeString()}`
+                : 'Disconnected: retrying...';
+        }
+
+        function timeCell(task) {
+            if (task.started_at) {
+                const end = task.completed_at || Date.now() / 1000;
+                const duration = Math.max(0, end - task.started_at).toFixed(1);
+                const start = new Date(task.started_at * 1000).toLocaleTimeString();
+                return `${esc(start)}<br><span class="meta-text">${duration}s</span>`;
+            }
+            const queued = task.status === 'PENDING' || task.status === 'RETRYING';
+            return `<span class="meta-text">${queued ? 'Queued' : '-'}</span>`;
+        }
+
+        function rowHtml(task) {
+            const action = task.status === 'FAILED'
+                ? `<button type="button" data-retry="${esc(task.id)}">Retry manually</button>` : '';
+            const error = task.error && task.status === 'FAILED'
+                ? `<span class="error-text">${esc(task.error)}</span>` : '';
+            return `
+                <tr>
+                    <td><strong>${esc(task.id)}</strong><br><span class="meta-text">${esc(task.func_name)}</span></td>
+                    <td>${esc(task.priority)}</td>
+                    <td><span class="badge bg-${esc(task.status)}">${esc(task.status)}</span>${error}</td>
+                    <td>${esc(task.retries)} / ${esc(task.max_retries)}</td>
+                    <td>${timeCell(task)}</td>
+                    <td>${action}</td>
+                </tr>`;
+        }
+
+        const lastTouched = (t) => t.completed_at || t.started_at || t.created_at || 0;
+
+        function sortTasks(tasks) {
+            const rank = (t) => STATUS_ORDER[t.status] ?? 4;
+            return tasks.sort((a, b) => rank(a) - rank(b) || lastTouched(b) - lastTouched(a));
+        }
+
+        async function retryTask(id, button) {
+            button.disabled = true;
+            button.textContent = 'Queuing...';
+            try {
+                const res = await fetch(`/api/retry/${encodeURIComponent(id)}`, { method: 'POST' });
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body.detail || res.statusText);
+                }
+            } catch (err) {
+                showMessage(`Could not retry task ${id}: ${err.message}`);
+            }
+            await refresh();
+        }
+
+        async function refresh() {
+            if (busy) return;
+            busy = true;
+            try {
+                const [statRes, taskRes] = await Promise.all([fetch('/api/status'), fetch('/api/tasks')]);
+                if (!statRes.ok || !taskRes.ok) throw new Error('Server error');
+                const { stats } = await statRes.json();
+                const tasks = await taskRes.json();
+
+                document.getElementById('count-queued').textContent = (stats.PENDING || 0) + (stats.RETRYING || 0);
+                document.getElementById('count-running').textContent = stats.RUNNING || 0;
+                document.getElementById('count-completed').textContent = stats.COMPLETED || 0;
+                document.getElementById('count-failed').textContent = stats.FAILED || 0;
+
+                document.getElementById('task-list').innerHTML = tasks.length
+                    ? sortTasks(tasks).map(rowHtml).join('')
+                    : '<tr><td colspan="6" class="empty">No tasks yet. Start the engine with --demo or POST to /api/tasks.</td></tr>';
+                setConnection(true);
+            } catch (err) {
+                setConnection(false);
+            } finally {
+                busy = false;
+            }
+        }
+
+        document.getElementById('task-list').addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-retry]');
+            if (button) retryTask(button.dataset.retry, button);
+        });
+
+        refresh();
+        setInterval(refresh, REFRESH_MS);
+    </script>
+</body>
+</html>
