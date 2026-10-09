@@ -27,9 +27,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 if sys.version_info < (3, 11):
-    raise RuntimeError("Task Queue Engine needs Python 3.11 or newer (it uses asyncio.timeout).")
+    raise RuntimeError(
+        "Task Queue Engine needs Python 3.11 or newer (it uses asyncio.timeout).")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("TaskEngine")
 
 # The database path can be overridden, which is how the tests avoid touching real data.
@@ -116,11 +118,13 @@ def init_db() -> None:
             """
         )
         # Upgrade databases created before the timestamp columns existed.
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
+        existing = {row["name"]
+                    for row in conn.execute("PRAGMA table_info(tasks)")}
         for column in ("created_at", "started_at", "completed_at"):
             if column not in existing:
                 conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} REAL")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
 
 
 def row_to_task(row: sqlite3.Row) -> TaskModel:
@@ -139,10 +143,13 @@ class TaskQueueEngine:
     def __init__(self, concurrency: int = 3) -> None:
         self.concurrency = concurrency
         self.backoff_multiplier = 1.0  # tests lower this to run retries quickly
-        self._counter = itertools.count()  # tie-breaker: equal priorities run first-in, first-out
-        self._queue: asyncio.PriorityQueue[tuple[int, int, TaskModel]] = asyncio.PriorityQueue()
+        # tie-breaker: equal priorities run first-in, first-out
+        self._counter = itertools.count()
+        self._queue: asyncio.PriorityQueue[tuple[int,
+                                                 int, TaskModel]] = asyncio.PriorityQueue()
         self._workers: list[asyncio.Task[None]] = []
-        self._retry_tasks: set[asyncio.Task[None]] = set()  # strong references so they are not garbage collected
+        # strong references so they are not garbage collected
+        self._retry_tasks: set[asyncio.Task[None]] = set()
         self._process_pool: ProcessPoolExecutor | None = None
         self._func_registry: dict[str, Callable[..., Any]] = {}
         self._is_running = False
@@ -167,7 +174,8 @@ class TaskQueueEngine:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    task.id, task.func_name, json.dumps(task.args), task.priority,
+                    task.id, task.func_name, json.dumps(
+                        task.args), task.priority,
                     task.max_retries, task.timeout, task.status.value, task.retries,
                     task.error, task.created_at, task.started_at, task.completed_at,
                 ),
@@ -182,7 +190,8 @@ class TaskQueueEngine:
         self._save_task(task)
         if task.status in (TaskStatus.PENDING, TaskStatus.RETRYING):
             self._enqueue(task)
-            logger.info("Task %s queued (%s, priority %d)", task.id, task.func_name, task.priority)
+            logger.info("Task %s queued (%s, priority %d)",
+                        task.id, task.func_name, task.priority)
         return task.id
 
     async def _execute_task(self, task: TaskModel) -> None:
@@ -202,7 +211,8 @@ class TaskQueueEngine:
         task.started_at = time.time()
         task.completed_at = None
         self._save_task(task)
-        logger.info("%s executing task %s (%s)", worker, task.id, task.func_name)
+        logger.info("%s executing task %s (%s)",
+                    worker, task.id, task.func_name)
 
         try:
             async with asyncio.timeout(task.timeout):
@@ -258,7 +268,8 @@ class TaskQueueEngine:
                 break
             except Exception:
                 # e.g. a locked database: log it and keep the worker alive
-                logger.exception("%s hit an unexpected error on task %s", name, task.id)
+                logger.exception(
+                    "%s hit an unexpected error on task %s", name, task.id)
             finally:
                 self._queue.task_done()
 
@@ -272,16 +283,19 @@ class TaskQueueEngine:
 
         with get_db() as conn:
             # Tasks that were mid-run when the engine stopped go back to the queue.
-            conn.execute("UPDATE tasks SET status = 'PENDING', started_at = NULL WHERE status = 'RUNNING'")
+            conn.execute(
+                "UPDATE tasks SET status = 'PENDING', started_at = NULL WHERE status = 'RUNNING'")
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE status IN ('PENDING', 'RETRYING')"
             ).fetchall()
         for row in rows:
             self._enqueue(row_to_task(row))
         if rows:
-            logger.info("Recovered %d unfinished task(s) from the database", len(rows))
+            logger.info(
+                "Recovered %d unfinished task(s) from the database", len(rows))
 
-        self._workers = [asyncio.create_task(self._worker_loop(i)) for i in range(self.concurrency)]
+        self._workers = [asyncio.create_task(
+            self._worker_loop(i)) for i in range(self.concurrency)]
 
     async def stop(self) -> None:
         self._is_running = False
@@ -319,11 +333,14 @@ engine.register_function("heavy_math", sync_cpu_heavy)
 def submit_demo_tasks(target: TaskQueueEngine) -> None:
     """A burst of tasks so the dashboard shows queued, running, completed and failed rows."""
     for site in ("api.github.com", "pypi.org", "python.org", "fastapi.tiangolo.com"):
-        target.submit(TaskModel(func_name="network_call", args=[f"https://{site}"], priority=10))
+        target.submit(TaskModel(func_name="network_call",
+                      args=[f"https://{site}"], priority=10))
     for n in (2, 3, 4, 5, 6):
-        target.submit(TaskModel(func_name="heavy_math", args=[n], priority=100))
+        target.submit(
+            TaskModel(func_name="heavy_math", args=[n], priority=100))
     # The crash task uses max_retries=1 so the dead-letter queue fills quickly.
-    target.submit(TaskModel(func_name="heavy_math", args=[13], priority=1, max_retries=1, timeout=5))
+    target.submit(TaskModel(func_name="heavy_math", args=[
+                  13], priority=1, max_retries=1, timeout=5))
 
 
 @asynccontextmanager
@@ -381,18 +398,21 @@ def get_tasks() -> list[dict[str, Any]]:
 @app.post("/api/tasks", status_code=201)
 async def create_task(request: TaskCreate) -> dict[str, str]:
     if not engine.has_function(request.func_name):
-        raise HTTPException(status_code=400, detail=f"Unknown function: {request.func_name}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown function: {request.func_name}")
     return {"id": engine.submit(TaskModel(**request.model_dump()))}
 
 
 @app.post("/api/retry/{task_id}")
 async def retry_task(task_id: str) -> dict[str, str]:
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?",
+                           (task_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if row["status"] != TaskStatus.FAILED.value:
-        raise HTTPException(status_code=409, detail="Only FAILED tasks can be retried")
+        raise HTTPException(
+            status_code=409, detail="Only FAILED tasks can be retried")
 
     task = row_to_task(row)
     task.status = TaskStatus.PENDING

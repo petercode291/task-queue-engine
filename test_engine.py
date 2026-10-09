@@ -32,7 +32,8 @@ async def wait_for_status(task_id: str, status: TaskStatus, timeout: float = 5.0
             return
         await asyncio.sleep(0.05)
     row = read_task(task_id)
-    raise AssertionError(f"task {task_id} is {row['status'] if row else 'missing'}, expected {status.value}")
+    raise AssertionError(
+        f"task {task_id} is {row['status'] if row else 'missing'}, expected {status.value}")
 
 
 def wait_until(check: Callable[[], bool], timeout: float = 5.0) -> None:
@@ -188,7 +189,8 @@ def client() -> Iterator[TestClient]:
 
 
 def insert_task(status: TaskStatus, func_name: str = "network_call") -> TaskModel:
-    task = TaskModel(func_name=func_name, args=["https://example.com"], status=status)
+    task = TaskModel(func_name=func_name, args=[
+                     "https://example.com"], status=status)
     task_engine.engine._save_task(task)
     return task
 
@@ -200,10 +202,12 @@ def test_dashboard_is_served(client: TestClient) -> None:
 
 
 def test_create_task_runs_it(client: TestClient) -> None:
-    response = client.post("/api/tasks", json={"func_name": "network_call", "args": ["https://example.com"]})
+    response = client.post(
+        "/api/tasks", json={"func_name": "network_call", "args": ["https://example.com"]})
     assert response.status_code == 201
     task_id = response.json()["id"]
-    wait_until(lambda: read_task(task_id)["status"] == TaskStatus.COMPLETED.value, timeout=6)
+    wait_until(lambda: read_task(task_id)[
+               "status"] == TaskStatus.COMPLETED.value, timeout=6)
 
 
 def test_create_task_rejects_unknown_function(client: TestClient) -> None:
@@ -212,13 +216,15 @@ def test_create_task_rejects_unknown_function(client: TestClient) -> None:
 
 
 def test_create_task_rejects_client_chosen_fields(client: TestClient) -> None:
-    response = client.post("/api/tasks", json={"func_name": "network_call", "id": "x');alert(1);//"})
+    response = client.post(
+        "/api/tasks", json={"func_name": "network_call", "id": "x');alert(1);//"})
     assert response.status_code == 422
 
 
 @pytest.mark.parametrize("payload", [{"timeout": -5}, {"max_retries": 100000}, {"priority": -1}])
 def test_create_task_validates_limits(client: TestClient, payload: dict) -> None:
-    response = client.post("/api/tasks", json={"func_name": "network_call", **payload})
+    response = client.post(
+        "/api/tasks", json={"func_name": "network_call", **payload})
     assert response.status_code == 422
 
 
@@ -235,7 +241,8 @@ def test_retry_requeues_failed_task(client: TestClient) -> None:
     failed = insert_task(TaskStatus.FAILED)
     response = client.post(f"/api/retry/{failed.id}")
     assert response.status_code == 200
-    wait_until(lambda: read_task(failed.id)["status"] == TaskStatus.COMPLETED.value, timeout=6)
+    wait_until(lambda: read_task(failed.id)[
+               "status"] == TaskStatus.COMPLETED.value, timeout=6)
 
 
 def test_status_counts_every_state(client: TestClient) -> None:
